@@ -52,7 +52,7 @@ bool v4l2_getBuffer(int fd, uint32_t index, struct v4l2_buffer* buffer);
 bool v4l2_mapBuffer(int fd, struct v4l2_buffer* buffer, void** ptr);
 
 /* 取消映射缓冲数据指针 */
-bool v4l2_unmapBuffer(struct v4l2_buffer* buffer, void* ptr);
+bool v4l2_unmapBuffer(int fd, struct v4l2_buffer* buffer, void* ptr);
 
 /* 将帧缓冲加入采集队列 */
 bool v4l2_pushQueue(int fd, struct v4l2_buffer* buffer);
@@ -65,6 +65,12 @@ bool v4l2_start(int fd);
 
 /* 停止采集 */
 bool v4l2_stop(int fd);
+
+/* 等待采集队列中有数据可读 */
+bool v4l2_wait(int fd);
+
+/* 解压JPEG数据，转换成RGB格式 */
+bool v4l2_jpegToRGB(const void* jpeg, size_t inSize, void** rgb, size_t* outSize);
 
 
 #endif

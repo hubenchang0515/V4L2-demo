@@ -1,5 +1,8 @@
 #include "v4l2.h"
 #include <sys/mman.h>
+#include <jpeglib.h>
+#include <stdlib.h>
+#include <poll.h>
 
 /* 判断设备是否支持指定的图像格式 */
 bool v4l2_testPixFormat(int fd, uint32_t fmt)
@@ -8,19 +11,20 @@ bool v4l2_testPixFormat(int fd, uint32_t fmt)
     fmtdesc.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmtdesc.index=0;
 
-    bool supported = false;
     V4L2_LOG("Support formats:\n");
     while(ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc) != -1)
     {
-        V4L2_LOG("\t%d.%s\n",fmtdesc.index+1,fmtdesc.description);
-        fmtdesc.index++;
         if(fmtdesc.pixelformat == fmt)
         {
-            supported = true;
+            V4L2_LOG("\t->%d.%s\n",fmtdesc.index+1,fmtdesc.description);
+            return true;
         }
+        V4L2_LOG("\t  %d.%s\n",fmtdesc.index+1,fmtdesc.description);
+
+        fmtdesc.index++;
     }
     
-    return supported;
+    return false;
 }
 
 /* 设置像素格式 */
@@ -158,7 +162,7 @@ bool v4l2_setFPS(int fd, uint32_t fps)
     return true;
 }
 
-/* 申请指定数量的帧缓冲 */
+/* 申请指定数量的帧缓冲队列 */
 bool v4l2_requestBuffer(int fd, uint32_t count)
 {
     struct v4l2_requestbuffers request;
@@ -166,7 +170,7 @@ bool v4l2_requestBuffer(int fd, uint32_t count)
     request.memory = V4L2_MEMORY_MMAP;
     request.count = count;
 
-    if(ioctl(fd, VIDIOC_REQBUFS, &request) < 0)
+    if(!ioctl(fd, VIDIOC_REQBUFS, &request) < 0)
     {
         V4L2_LOG("ioctl VIDIOC_REQBUFS failed: %s\n", strerror(errno));
         return false;
@@ -175,7 +179,7 @@ bool v4l2_requestBuffer(int fd, uint32_t count)
     return true;
 }
 
-/* 获取帧缓冲 */
+/* 获取帧缓冲的位置 */
 bool v4l2_getBuffer(int fd, uint32_t index, struct v4l2_buffer* buffer)
 {
     memset(buffer, 0, sizeof(*buffer));
@@ -206,7 +210,7 @@ bool v4l2_mapBuffer(int fd, struct v4l2_buffer* buffer, void** ptr)
 }
 
 /* 取消映射缓冲数据指针 */
-bool v4l2_unmapBuffer(struct v4l2_buffer* buffer, void* ptr)
+bool v4l2_unmapBuffer(int fd, struct v4l2_buffer* buffer, void* ptr)
 {
     if(munmap(ptr, buffer->length) < 0)
     {
@@ -263,6 +267,54 @@ bool v4l2_stop(int fd)
         fprintf(stderr, "ioctl VIDIOC_STREAMOFF failed: %s\n", strerror(errno));
         return false;
     }
+
+    return true;
+}
+
+/* 等待采集队列中有数据可读 */
+bool v4l2_wait(int fd)
+{
+    struct pollfd fds[1];
+    fds[0].fd = fd;
+    fds[0].events = POLLIN | POLLPRI;
+    return poll(fds, 1, -1) > 0;
+}
+
+/* 解压JPEG数据，转换成RGB格式 */
+bool v4l2_jpegToRGB(const void* jpeg, size_t inSize, void** rgb, size_t* outSize)
+{
+    // 创建解压结构
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    cinfo.err=jpeg_std_error(&jerr);
+    jpeg_create_decompress(&cinfo);
+    
+    // 输入JPEG数据
+    jpeg_mem_src(&cinfo, (const unsigned char*)(jpeg), inSize);
+    
+    // 解析header
+    jpeg_read_header(&cinfo, false);
+    jpeg_calc_output_dimensions(&cinfo);
+
+    // 给RGB数据分配空间
+    size_t rowSize = cinfo.output_components * cinfo.output_width;
+    *outSize = rowSize * cinfo.output_height;
+    *rgb = malloc(*outSize);
+
+    // 行缓冲
+    JSAMPARRAY buffer = cinfo.mem->alloc_sarray((j_common_ptr)(&cinfo), JPOOL_IMAGE, rowSize, 1);
+
+    // 逐行解压
+    jpeg_start_decompress(&cinfo);
+    for(void* ptr = *rgb; cinfo.output_scanline < cinfo.output_height; ptr += rowSize)
+    {
+        jpeg_read_scanlines(&cinfo, buffer, 1);
+        memcpy(ptr, buffer[0], rowSize);
+    }
+
+    // 结束
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
 
     return true;
 }

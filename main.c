@@ -21,16 +21,15 @@ int main()
     }
 
     /* 设置像素格式 */
-    if(!v4l2_testPixFormat(fd, V4L2_PIX_FMT_YUYV))
+    if(!v4l2_testPixFormat(fd, V4L2_PIX_FMT_MJPEG))
     {
         fprintf(stderr, "YUYV is unsupported\n");
         return EXIT_FAILURE;
     }
-    v4l2_setPixFormat(fd, V4L2_PIX_FMT_YUYV);
+    v4l2_setPixFormat(fd, V4L2_PIX_FMT_MJPEG);
 
-    /* 设置分辨率 */
+    /* 读取分辨率 */
     uint32_t w, h;
-    v4l2_setSize(fd, 640, 360);
     v4l2_getSize(fd, &w, &h);
     printf("size: %u x %u\n", w, h);
 
@@ -52,25 +51,25 @@ int main()
     }
 
     // 创建窗口
-    SDL_Window* window = NULL;
-    SDL_Renderer* renderer = NULL;
-    SDL_CreateWindowAndRenderer(w, h, SDL_WINDOW_SHOWN, &window, &renderer);
+    SDL_Window* window = SDL_CreateWindow(
+        "Camera", 
+        SDL_WINDOWPOS_UNDEFINED, 
+        SDL_WINDOWPOS_UNDEFINED,
+        w, h, SDL_WINDOW_SHOWN);
+
+    // 创建渲染器
+    SDL_Renderer* renderer = SDL_CreateRenderer(
+        window, 
+        -1, 
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
 
     // 创建纹理
     SDL_Texture* texture = SDL_CreateTexture(
         renderer, 
-        SDL_PIXELFORMAT_YUY2, 
+        SDL_PIXELFORMAT_RGB24, 
         SDL_TEXTUREACCESS_STREAMING,
         w, h
     );
-
-    // 使用select等待采集完成
-    fd_set fds;
-    FD_ZERO(&fds); 
-    FD_SET(fd,  &fds); 
-    struct timeval   tv; 
-    tv.tv_sec = 2;
-    tv.tv_usec = 0;
 
     // 将5个缓冲加入采集队列
     for(uint32_t i = 0; i < BUFFER_COUNT; i++)
@@ -78,6 +77,9 @@ int main()
 
     // 开始采集
     v4l2_start(fd);
+
+    // 矩形范围
+    SDL_Rect rect = {0, 0, w, h};
 
     // 事件
     SDL_Event event;
@@ -95,16 +97,23 @@ int main()
         }
 
         // 等待采集完成
-        select(fd+1, &fds, NULL, NULL, &tv);
+        if(!v4l2_wait(fd))
+            continue;
 
         // 读取一帧缓冲
         v4l2_popQueue(fd, &(buffer[index]));
 
+        // JPEG 转 RGB
+        void* rgb = NULL;
+        size_t outSize = 0;
+        v4l2_jpegToRGB(bufPtr[index], buffer[index].bytesused, &rgb, &outSize);
+
         // 显示
-        if(SDL_UpdateTexture(texture, NULL, bufPtr[index], w * 2) < 0)
+        if(SDL_UpdateTexture(texture, NULL, rgb, w * 3) < 0)
         {
             SDL_Log("SDL_UpdateTexture failed: %s\n", SDL_GetError());
         }
+        free(rgb);
         SDL_RenderCopy(renderer, texture, NULL, NULL);
         SDL_RenderPresent(renderer);
 
@@ -121,9 +130,9 @@ int main()
     SDL_DestroyWindow(window);
     SDL_DestroyRenderer(renderer);
 
-    for(uint32_t i = 0; i < BUFFER_COUNT; i++)
+    for(uint32_t i; i < BUFFER_COUNT; i++)
     {
-        v4l2_unmapBuffer(&(buffer[i]), bufPtr[i]);
+        v4l2_unmapBuffer(fd, &(buffer[i]), bufPtr[i]);
     }
     close(fd);
 

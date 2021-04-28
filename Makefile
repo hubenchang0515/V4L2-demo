@@ -1,8 +1,8 @@
 
 TARGET := camera
 OBJS := main.o v4l2.o
-CFLAGS := -DDEBUG -W -Wall -Wextra -O3
-LIBS := -lSDL2
+CFLAGS := -DDEBUG
+LIBS := -lSDL2 -ljpeg
 
 .PHONY: all clean
 
